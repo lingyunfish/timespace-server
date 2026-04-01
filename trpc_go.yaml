@@ -1,0 +1,30 @@
+global:
+  namespace: Development
+  env_name: dev
+
+server:
+  app: timespace
+  server: capsule
+  service:
+    - name: trpc.timespace.capsule.http
+      ip: 0.0.0.0
+      port: 8080
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 5000
+
+plugins:
+  log:
+    default:
+      - writer: console
+        level: debug
+        formatter: console
+      - writer: file
+        level: info
+        formatter: json
+        writer_config:
+          filename: ./logs/timespace.log
+          max_size: 100
+          max_backups: 10
+          max_age: 30
+          compress: false

@@ -1,0 +1,35 @@
+{
+  "server": {
+    "port": 8080
+  },
+  "mysql": {
+    "dsn": "root:123456@tcp(127.0.0.1:3306)/timespace?charset=utf8mb4&parseTime=True&loc=Local",
+    "max_open_conns": 100,
+    "max_idle_conns": 10,
+    "conn_max_lifetime": 3600
+  },
+  "redis": {
+    "addr": "127.0.0.1:6379",
+    "password": "",
+    "db": 0,
+    "pool_size": 100
+  },
+  "wechat": {
+    "app_id": "your_app_id",
+    "app_secret": "your_app_secret"
+  },
+  "jwt": {
+    "secret": "timespace-jwt-secret-key-change-in-production",
+    "expire_hours": 168
+  },
+  "upload": {
+    "max_size": 10485760,
+    "allowed_types": ["image/jpeg", "image/png", "image/gif", "image/webp"],
+    "save_path": "./uploads",
+    "url_prefix": "/static/uploads"
+  },
+  "geo": {
+    "nearby_radius": 50,
+    "search_radius": 5000
+  }
+}
