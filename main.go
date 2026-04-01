@@ -148,18 +148,13 @@ func handlePhotoRoutes(w http.ResponseWriter, r *http.Request) error {
 }
 
 // 包装函数类型适配
-type httpHandler func(http.ResponseWriter, *http.Request) error
-
-func wrapHandler(h httpHandler) func(w http.ResponseWriter, r *http.Request) error {
+func wrapHandler(h middleware.HTTPHandler) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		middleware.CORSMiddlewareHTTP(func(w http.ResponseWriter, r *http.Request) error {
-			return h(w, r)
-		})(w, r)
-		return nil
+		return middleware.CORSMiddlewareHTTP(h)(w, r)
 	}
 }
 
-func wrapAuth(h httpHandler) func(w http.ResponseWriter, r *http.Request) error {
+func wrapAuth(h middleware.HTTPHandler) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		return middleware.CORSMiddlewareHTTP(
 			middleware.AuthMiddlewareHTTP(h),
@@ -167,7 +162,7 @@ func wrapAuth(h httpHandler) func(w http.ResponseWriter, r *http.Request) error 
 	}
 }
 
-func wrapOptionalAuth(h httpHandler) func(w http.ResponseWriter, r *http.Request) error {
+func wrapOptionalAuth(h middleware.HTTPHandler) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		return middleware.CORSMiddlewareHTTP(
 			middleware.OptionalAuthMiddlewareHTTP(h),
