@@ -8,39 +8,33 @@ import (
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 
-	"timespace/config"
-	"timespace/db"
+	_ "timespace/config" // init() 注册自定义插件，框架启动时自动从 trpc_go.yaml 加载配置
 	"timespace/handler"
 	"timespace/middleware"
 )
 
 func main() {
-	// 加载业务配置
-	cfg, err := config.Load("config/config.json")
-	if err != nil {
-		panic("load config failed: " + err.Error())
-	}
+	// 创建tRPC服务（框架自动加载 trpc_go.yaml，触发 plugins.custom.timespace 的 Setup）
+	s := trpc.NewServer()
 
-	// 初始化MySQL
-	if err := db.InitMySQL(); err != nil {
-		log.Warnf("init mysql failed: %v, running without database", err)
-	} else {
-		defer db.CloseMySQL()
-		log.Info("mysql connected")
-	}
+	// // 初始化MySQL
+	// if err := db.InitMySQL(); err != nil {
+	// 	log.Warnf("init mysql failed: %v, running without database", err)
+	// } else {
+	// 	defer db.CloseMySQL()
+	// 	log.Info("mysql connected")
+	// }
 
-	// 初始化Redis
-	if err := db.InitRedis(); err != nil {
-		log.Warnf("init redis failed: %v, running without cache", err)
-	} else {
-		defer db.CloseRedis()
-		log.Info("redis connected")
-	}
-
-	_ = cfg
+	// // 初始化Redis
+	// if err := db.InitRedis(); err != nil {
+	// 	log.Warnf("init redis failed: %v, running without cache", err)
+	// } else {
+	// 	defer db.CloseRedis()
+	// 	log.Info("redis connected")
+	// }
 
 	// 创建tRPC服务
-	s := trpc.NewServer()
+	//s := trpc.NewServer()
 
 	// ============ 注册路由 ============
 

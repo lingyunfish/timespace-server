@@ -13,6 +13,19 @@ server:
       protocol: http_no_protocol
       timeout: 5000
 
+client:
+  service:
+    # MySQL: DSN 从环境变量读取
+    - name: trpc.mysql.timespace.default
+      target: ip://${MYSQL_DSN}
+      network: tcp
+      timeout: 3000
+    # Redis: 地址从环境变量读取
+    - name: trpc.redis.timespace.default
+      target: ip://${REDIS_ADDR}?db=${REDIS_DB}&password=${REDIS_PASSWORD}
+      network: tcp
+      timeout: 1000
+
 plugins:
   log:
     default:
@@ -28,3 +41,24 @@ plugins:
           max_backups: 10
           max_age: 30
           compress: false
+  # 业务自定义配置，敏感信息从环境变量获取
+  custom:
+    timespace:
+      wechat:
+        app_id: ${WECHAT_APP_ID}
+        app_secret: ${WECHAT_APP_SECRET}
+      jwt:
+        secret: ${JWT_SECRET}
+        expire_hours: 168
+      upload:
+        max_size: 10485760
+        allowed_types:
+          - "image/jpeg"
+          - "image/png"
+          - "image/gif"
+          - "image/webp"
+        save_path: "./uploads"
+        url_prefix: "/static/uploads"
+      geo:
+        nearby_radius: 50
+        search_radius: 5000

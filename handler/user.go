@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +12,8 @@ import (
 	"timespace/middleware"
 	"timespace/model"
 	"timespace/util"
+
+	trmysql "trpc.group/trpc-go/trpc-database/mysql"
 )
 
 // LoginRequest 登录请求
@@ -35,6 +36,34 @@ type WxLoginResp struct {
 	ErrMsg     string `json:"errmsg"`
 }
 
+// UserDB 用于 sqlx 映射的用户结构体
+type UserDB struct {
+	ID        uint64 `db:"id"`
+	OpenID    string `db:"openid"`
+	Nickname  string `db:"nickname"`
+	AvatarURL string `db:"avatar_url"`
+	Gender    int    `db:"gender"`
+	Level     int    `db:"level"`
+	Exp       int    `db:"exp"`
+	IsVIP     int    `db:"is_vip"`
+	Status    int    `db:"status"`
+	CreatedAt string `db:"created_at"`
+}
+
+func toModelUser(u *UserDB) model.User {
+	return model.User{
+		ID:        u.ID,
+		OpenID:    u.OpenID,
+		Nickname:  u.Nickname,
+		AvatarURL: u.AvatarURL,
+		Gender:    u.Gender,
+		Level:     u.Level,
+		Exp:       u.Exp,
+		IsVIP:     u.IsVIP != 0,
+		Status:    u.Status,
+	}
+}
+
 // UserLogin 微信小程序登录
 func UserLogin(w http.ResponseWriter, r *http.Request) error {
 	var req LoginRequest
@@ -42,7 +71,6 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 		util.Error(w, 400, "参数错误")
 		return nil
 	}
-
 	if req.Code == "" {
 		util.Error(w, 400, "code不能为空")
 		return nil
@@ -54,7 +82,6 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 		"https://api.weixin.qq.com/sns/jscode2session?appid=%s&secret=%s&js_code=%s&grant_type=authorization_code",
 		cfg.AppID, cfg.AppSecret, req.Code,
 	)
-
 	wxResp, err := http.Get(wxURL)
 	if err != nil {
 		util.Error(w, 500, "微信登录失败")
@@ -65,23 +92,24 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 	body, _ := io.ReadAll(wxResp.Body)
 	var wxLogin WxLoginResp
 	if err := json.Unmarshal(body, &wxLogin); err != nil || wxLogin.ErrCode != 0 {
-		// 开发环境允许模拟登录
 		wxLogin.OpenID = "dev_" + req.Code
 		wxLogin.SessionKey = "dev_session"
 	}
 
-	// 查询或创建用户
-	mysql := db.GetMySQL()
-	var user model.User
-	err = mysql.QueryRowContext(r.Context(),
+	// 通过 tRPC mysql proxy 查询或创建用户
+	proxy := db.GetMySQLProxy()
+	ctx := r.Context()
+
+	var userDB UserDB
+	err = proxy.QueryToStruct(ctx, &userDB,
 		"SELECT id, openid, nickname, avatar_url, gender, level, exp, is_vip, status, created_at FROM users WHERE openid = ?",
 		wxLogin.OpenID,
-	).Scan(&user.ID, &user.OpenID, &user.Nickname, &user.AvatarURL, &user.Gender,
-		&user.Level, &user.Exp, &user.IsVIP, &user.Status, &user.CreatedAt)
+	)
 
+	var user model.User
 	if err != nil {
 		// 新用户注册
-		result, err := mysql.ExecContext(r.Context(),
+		result, err := proxy.Exec(ctx,
 			"INSERT INTO users (openid, union_id, session_key, nickname, level) VALUES (?, ?, ?, ?, ?)",
 			wxLogin.OpenID, wxLogin.UnionID, wxLogin.SessionKey, "时空旅行者", 1,
 		)
@@ -91,15 +119,12 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 		}
 		id, _ := result.LastInsertId()
 		user = model.User{
-			ID:       uint64(id),
-			OpenID:   wxLogin.OpenID,
-			Nickname: "时空旅行者",
-			Level:    1,
-			Status:   1,
+			ID: uint64(id), OpenID: wxLogin.OpenID,
+			Nickname: "时空旅行者", Level: 1, Status: 1,
 		}
 	} else {
-		// 更新session_key
-		mysql.ExecContext(r.Context(),
+		user = toModelUser(&userDB)
+		proxy.Exec(ctx,
 			"UPDATE users SET session_key = ?, updated_at = NOW() WHERE id = ?",
 			wxLogin.SessionKey, user.ID,
 		)
@@ -112,15 +137,12 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	// 缓存用户信息到Redis
+	// 缓存
 	rdb := db.GetRedis()
 	userJSON, _ := json.Marshal(user)
-	rdb.Set(context.Background(), fmt.Sprintf("user:%d", user.ID), userJSON, 24*time.Hour)
+	rdb.Set(ctx, fmt.Sprintf("user:%d", user.ID), userJSON, 24*time.Hour)
 
-	util.Success(w, LoginResponse{
-		Token:    token,
-		UserInfo: &user,
-	})
+	util.Success(w, LoginResponse{Token: token, UserInfo: &user})
 	return nil
 }
 
@@ -139,7 +161,6 @@ func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	// 先查缓存
 	rdb := db.GetRedis()
 	cached, err := rdb.Get(r.Context(), fmt.Sprintf("user:%d", userID)).Result()
 	if err == nil {
@@ -150,20 +171,18 @@ func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	// 查数据库
-	mysql := db.GetMySQL()
-	var user model.User
-	err = mysql.QueryRowContext(r.Context(),
+	proxy := db.GetMySQLProxy()
+	var userDB UserDB
+	err = proxy.QueryToStruct(r.Context(), &userDB,
 		"SELECT id, nickname, avatar_url, gender, level, exp, is_vip, status, created_at FROM users WHERE id = ?",
 		userID,
-	).Scan(&user.ID, &user.Nickname, &user.AvatarURL, &user.Gender,
-		&user.Level, &user.Exp, &user.IsVIP, &user.Status, &user.CreatedAt)
+	)
 	if err != nil {
 		util.Error(w, 404, "用户不存在")
 		return nil
 	}
+	user := toModelUser(&userDB)
 
-	// 更新缓存
 	userJSON, _ := json.Marshal(user)
 	rdb.Set(r.Context(), fmt.Sprintf("user:%d", userID), userJSON, 24*time.Hour)
 
@@ -178,15 +197,14 @@ func UpdateUserInfo(w http.ResponseWriter, r *http.Request) error {
 		util.Error(w, 401, "未登录")
 		return nil
 	}
-
 	var req UpdateUserInfoRequest
 	if err := util.ParseJSON(r, &req); err != nil {
 		util.Error(w, 400, "参数错误")
 		return nil
 	}
 
-	mysql := db.GetMySQL()
-	_, err := mysql.ExecContext(r.Context(),
+	proxy := db.GetMySQLProxy()
+	_, err := proxy.Exec(r.Context(),
 		"UPDATE users SET nickname = ?, avatar_url = ?, gender = ?, updated_at = NOW() WHERE id = ?",
 		req.Nickname, req.AvatarURL, req.Gender, userID,
 	)
@@ -195,10 +213,8 @@ func UpdateUserInfo(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	// 删除缓存
 	rdb := db.GetRedis()
 	rdb.Del(r.Context(), fmt.Sprintf("user:%d", userID))
-
 	util.Success(w, nil)
 	return nil
 }
@@ -211,27 +227,33 @@ func GetUserStats(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	mysql := db.GetMySQL()
+	proxy := db.GetMySQLProxy()
+	ctx := r.Context()
 	var stats model.UserStats
 
-	mysql.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM photos WHERE user_id = ? AND status = 1", userID,
-	).Scan(&stats.PhotoCount)
-
-	mysql.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM footprints WHERE user_id = ?", userID,
-	).Scan(&stats.PlaceCount)
-
-	mysql.QueryRowContext(r.Context(),
-		"SELECT COALESCE(SUM(p.like_count), 0) FROM photos p WHERE p.user_id = ? AND p.status = 1", userID,
-	).Scan(&stats.LikeReceived)
-
-	mysql.QueryRowContext(r.Context(),
-		"SELECT COUNT(*) FROM user_achievements WHERE user_id = ?", userID,
-	).Scan(&stats.AchievementCount)
+	proxy.QueryRow(ctx, []interface{}{&stats.PhotoCount},
+		"SELECT COUNT(*) FROM photos WHERE user_id = ? AND status = 1", userID)
+	proxy.QueryRow(ctx, []interface{}{&stats.PlaceCount},
+		"SELECT COUNT(*) FROM footprints WHERE user_id = ?", userID)
+	proxy.QueryRow(ctx, []interface{}{&stats.LikeReceived},
+		"SELECT COALESCE(SUM(p.like_count), 0) FROM photos p WHERE p.user_id = ? AND p.status = 1", userID)
+	proxy.QueryRow(ctx, []interface{}{&stats.AchievementCount},
+		"SELECT COUNT(*) FROM user_achievements WHERE user_id = ?", userID)
 
 	util.Success(w, stats)
 	return nil
+}
+
+// AchievementDB 成就 sqlx 映射
+type AchievementDB struct {
+	ID             uint64 `db:"id"`
+	Name           string `db:"name"`
+	Description    string `db:"description"`
+	Icon           string `db:"icon"`
+	ConditionType  string `db:"condition_type"`
+	ConditionValue int    `db:"condition_value"`
+	ExpReward      int    `db:"exp_reward"`
+	Unlocked       int    `db:"unlocked"`
 }
 
 // GetUserAchievements 获取用户成就列表
@@ -242,8 +264,9 @@ func GetUserAchievements(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	mysql := db.GetMySQL()
-	rows, err := mysql.QueryContext(r.Context(),
+	proxy := db.GetMySQLProxy()
+	var rows []AchievementDB
+	err := proxy.Select(r.Context(), &rows,
 		`SELECT ad.id, ad.name, ad.description, ad.icon, ad.condition_type, ad.condition_value, ad.exp_reward,
 			CASE WHEN ua.id IS NOT NULL THEN 1 ELSE 0 END as unlocked
 		FROM achievement_defs ad
@@ -255,20 +278,22 @@ func GetUserAchievements(w http.ResponseWriter, r *http.Request) error {
 		util.Error(w, 500, "查询失败")
 		return nil
 	}
-	defer rows.Close()
 
 	var achievements []model.Achievement
-	for rows.Next() {
-		var a model.Achievement
-		var unlocked int
-		rows.Scan(&a.ID, &a.Name, &a.Description, &a.Icon, &a.ConditionType,
-			&a.ConditionValue, &a.ExpReward, &unlocked)
-		a.Unlocked = unlocked == 1
-		achievements = append(achievements, a)
+	for _, row := range rows {
+		achievements = append(achievements, model.Achievement{
+			AchievementDef: model.AchievementDef{
+				ID: row.ID, Name: row.Name, Description: row.Description,
+				Icon: row.Icon, ConditionType: row.ConditionType,
+				ConditionValue: row.ConditionValue, ExpReward: row.ExpReward,
+			},
+			Unlocked: row.Unlocked == 1,
+		})
 	}
 
-	util.Success(w, map[string]interface{}{
-		"achievements": achievements,
-	})
+	util.Success(w, map[string]interface{}{"achievements": achievements})
 	return nil
 }
+
+// 确保 trmysql 包被引用
+var _ trmysql.Client
