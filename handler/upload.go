@@ -19,7 +19,7 @@ import (
 func UploadFile(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 
@@ -28,14 +28,14 @@ func UploadFile(w http.ResponseWriter, r *http.Request) error {
 	r.ParseMultipartForm(cfg.MaxSize)
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		util.Error(w, 400, "获取文件失败")
+		util.ErrorCtx(r.Context(), w, 400, "获取文件失败", err)
 		return nil
 	}
 	defer file.Close()
 
 	// 检查文件大小
 	if header.Size > cfg.MaxSize {
-		util.Error(w, 400, "文件太大")
+		util.ErrorCtx(r.Context(), w, 400, "文件太大", nil)
 		return nil
 	}
 
@@ -49,7 +49,7 @@ func UploadFile(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	if !allowed {
-		util.Error(w, 400, "不支持的文件类型")
+		util.ErrorCtx(r.Context(), w, 400, "不支持的文件类型", nil)
 		return nil
 	}
 
@@ -79,13 +79,13 @@ func UploadFile(w http.ResponseWriter, r *http.Request) error {
 
 	dst, err := os.Create(savePath)
 	if err != nil {
-		util.Error(w, 500, "保存文件失败")
+		util.ErrorCtx(r.Context(), w, 500, "保存文件失败", err)
 		return nil
 	}
 	defer dst.Close()
 
 	if _, err := io.Copy(dst, file); err != nil {
-		util.Error(w, 500, "保存文件失败")
+		util.ErrorCtx(r.Context(), w, 500, "保存文件失败", nil)
 		return nil
 	}
 

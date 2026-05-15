@@ -14,6 +14,7 @@ import (
 	"timespace/util"
 
 	trmysql "trpc.group/trpc-go/trpc-database/mysql"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // LoginRequest 登录请求
@@ -52,27 +53,23 @@ type UserDB struct {
 
 func toModelUser(u *UserDB) model.User {
 	return model.User{
-		ID:        u.ID,
-		OpenID:    u.OpenID,
-		Nickname:  u.Nickname,
-		AvatarURL: u.AvatarURL,
-		Gender:    u.Gender,
-		Level:     u.Level,
-		Exp:       u.Exp,
-		IsVIP:     u.IsVIP != 0,
-		Status:    u.Status,
+		ID: u.ID, OpenID: u.OpenID, Nickname: u.Nickname,
+		AvatarURL: u.AvatarURL, Gender: u.Gender,
+		Level: u.Level, Exp: u.Exp,
+		IsVIP: u.IsVIP != 0, Status: u.Status,
 	}
 }
 
 // UserLogin 微信小程序登录
 func UserLogin(w http.ResponseWriter, r *http.Request) error {
+	ctx := r.Context()
 	var req LoginRequest
 	if err := util.ParseJSON(r, &req); err != nil {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(ctx, w, 400, "参数错误", err)
 		return nil
 	}
 	if req.Code == "" {
-		util.Error(w, 400, "code不能为空")
+		util.ErrorCtx(ctx, w, 400, "code不能为空", nil)
 		return nil
 	}
 
@@ -84,7 +81,8 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 	)
 	wxResp, err := http.Get(wxURL)
 	if err != nil {
-		util.Error(w, 500, "微信登录失败")
+		log.WithContext(ctx).Errorf("[WX LOGIN] call wechat api failed: %v, code=%s", err, req.Code)
+		util.ErrorCtx(ctx, w, 500, "微信登录失败", err)
 		return nil
 	}
 	defer wxResp.Body.Close()
@@ -92,29 +90,34 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 	body, _ := io.ReadAll(wxResp.Body)
 	var wxLogin WxLoginResp
 	if err := json.Unmarshal(body, &wxLogin); err != nil || wxLogin.ErrCode != 0 {
+		log.WithContext(ctx).Warnf("[WX LOGIN] wechat resp invalid, fallback to dev mode. resp=%s err=%v", string(body), err)
 		wxLogin.OpenID = "dev_" + req.Code
 		wxLogin.SessionKey = "dev_session"
 	}
 
-	// 通过 tRPC mysql proxy 查询或创建用户
 	proxy := db.GetMySQLProxy()
-	ctx := r.Context()
+	if proxy == nil {
+		util.ErrorCtx(ctx, w, 500, "数据库未连接", nil)
+		return nil
+	}
 
 	var userDB UserDB
-	err = proxy.QueryToStruct(ctx, &userDB,
+	queryErr := proxy.QueryToStruct(ctx, &userDB,
 		"SELECT id, openid, nickname, avatar_url, gender, level, exp, is_vip, status, created_at FROM users WHERE openid = ?",
 		wxLogin.OpenID,
 	)
 
 	var user model.User
-	if err != nil {
-		// 新用户注册
+	if queryErr != nil {
+		// 新用户注册（QueryToStruct 找不到记录会返回 error，这里记录但继续插入）
+		log.WithContext(ctx).Infof("[WX LOGIN] new user, openid=%s (query err: %v)", wxLogin.OpenID, queryErr)
 		result, err := proxy.Exec(ctx,
 			"INSERT INTO users (openid, union_id, session_key, nickname, level) VALUES (?, ?, ?, ?, ?)",
 			wxLogin.OpenID, wxLogin.UnionID, wxLogin.SessionKey, "时空旅行者", 1,
 		)
 		if err != nil {
-			util.Error(w, 500, "创建用户失败")
+			log.WithContext(ctx).Errorf("[DB ERR] insert user failed, openid=%s err=%v", wxLogin.OpenID, err)
+			util.ErrorCtx(ctx, w, 500, "创建用户失败", err)
 			return nil
 		}
 		id, _ := result.LastInsertId()
@@ -122,26 +125,33 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 			ID: uint64(id), OpenID: wxLogin.OpenID,
 			Nickname: "时空旅行者", Level: 1, Status: 1,
 		}
+		log.WithContext(ctx).Infof("[WX LOGIN] user created, id=%d openid=%s", user.ID, user.OpenID)
 	} else {
 		user = toModelUser(&userDB)
-		proxy.Exec(ctx,
+		if _, err := proxy.Exec(ctx,
 			"UPDATE users SET session_key = ?, updated_at = NOW() WHERE id = ?",
 			wxLogin.SessionKey, user.ID,
-		)
+		); err != nil {
+			util.LogDBError(ctx, "update session_key", err, user.ID)
+		}
 	}
 
-	// 生成token
 	token, err := middleware.GenerateToken(user.ID)
 	if err != nil {
-		util.Error(w, 500, "生成token失败")
+		log.WithContext(ctx).Errorf("[AUTH] generate token failed, uid=%d err=%v", user.ID, err)
+		util.ErrorCtx(ctx, w, 500, "生成token失败", err)
 		return nil
 	}
 
 	// 缓存
-	rdb := db.GetRedis()
-	userJSON, _ := json.Marshal(user)
-	rdb.Set(ctx, fmt.Sprintf("user:%d", user.ID), userJSON, 24*time.Hour)
+	if rdb := db.GetRedis(); rdb != nil {
+		userJSON, _ := json.Marshal(user)
+		if err := rdb.Set(ctx, fmt.Sprintf("user:%d", user.ID), userJSON, 24*time.Hour).Err(); err != nil {
+			util.LogCacheError(ctx, "set user cache", err)
+		}
+	}
 
+	log.WithContext(ctx).Infof("[WX LOGIN] success uid=%d openid=%s", user.ID, user.OpenID)
 	util.Success(w, LoginResponse{Token: token, UserInfo: &user})
 	return nil
 }
@@ -155,36 +165,44 @@ type UpdateUserInfoRequest struct {
 
 // GetUserInfo 获取当前用户信息
 func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
-	userID := middleware.GetUserID(r.Context())
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(ctx, w, 401, "未登录", nil)
 		return nil
 	}
 
 	rdb := db.GetRedis()
-	cached, err := rdb.Get(r.Context(), fmt.Sprintf("user:%d", userID)).Result()
-	if err == nil {
-		var user model.User
-		if json.Unmarshal([]byte(cached), &user) == nil {
-			util.Success(w, user)
-			return nil
+	if rdb != nil {
+		cached, err := rdb.Get(ctx, fmt.Sprintf("user:%d", userID)).Result()
+		if err == nil {
+			var user model.User
+			if json.Unmarshal([]byte(cached), &user) == nil {
+				util.Success(w, user)
+				return nil
+			}
 		}
 	}
 
 	proxy := db.GetMySQLProxy()
 	var userDB UserDB
-	err = proxy.QueryToStruct(r.Context(), &userDB,
+	err := proxy.QueryToStruct(ctx, &userDB,
 		"SELECT id, nickname, avatar_url, gender, level, exp, is_vip, status, created_at FROM users WHERE id = ?",
 		userID,
 	)
 	if err != nil {
-		util.Error(w, 404, "用户不存在")
+		util.LogDBError(ctx, "query user info", err, userID)
+		util.ErrorCtx(ctx, w, 404, "用户不存在", err)
 		return nil
 	}
 	user := toModelUser(&userDB)
 
-	userJSON, _ := json.Marshal(user)
-	rdb.Set(r.Context(), fmt.Sprintf("user:%d", userID), userJSON, 24*time.Hour)
+	if rdb != nil {
+		userJSON, _ := json.Marshal(user)
+		if err := rdb.Set(ctx, fmt.Sprintf("user:%d", userID), userJSON, 24*time.Hour).Err(); err != nil {
+			util.LogCacheError(ctx, "set user cache", err)
+		}
+	}
 
 	util.Success(w, user)
 	return nil
@@ -192,53 +210,65 @@ func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
 
 // UpdateUserInfo 更新用户信息
 func UpdateUserInfo(w http.ResponseWriter, r *http.Request) error {
-	userID := middleware.GetUserID(r.Context())
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(ctx, w, 401, "未登录", nil)
 		return nil
 	}
 	var req UpdateUserInfoRequest
 	if err := util.ParseJSON(r, &req); err != nil {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(ctx, w, 400, "参数错误", err)
 		return nil
 	}
 
 	proxy := db.GetMySQLProxy()
-	_, err := proxy.Exec(r.Context(),
+	_, err := proxy.Exec(ctx,
 		"UPDATE users SET nickname = ?, avatar_url = ?, gender = ?, updated_at = NOW() WHERE id = ?",
 		req.Nickname, req.AvatarURL, req.Gender, userID,
 	)
 	if err != nil {
-		util.Error(w, 500, "更新失败")
+		util.LogDBError(ctx, "update user info", err, userID)
+		util.ErrorCtx(ctx, w, 500, "更新失败", err)
 		return nil
 	}
 
-	rdb := db.GetRedis()
-	rdb.Del(r.Context(), fmt.Sprintf("user:%d", userID))
+	if rdb := db.GetRedis(); rdb != nil {
+		rdb.Del(ctx, fmt.Sprintf("user:%d", userID))
+	}
+	log.WithContext(ctx).Infof("[USER] update info success uid=%d", userID)
 	util.Success(w, nil)
 	return nil
 }
 
 // GetUserStats 获取用户统计信息
 func GetUserStats(w http.ResponseWriter, r *http.Request) error {
-	userID := middleware.GetUserID(r.Context())
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(ctx, w, 401, "未登录", nil)
 		return nil
 	}
 
 	proxy := db.GetMySQLProxy()
-	ctx := r.Context()
 	var stats model.UserStats
 
-	proxy.QueryRow(ctx, []interface{}{&stats.PhotoCount},
-		"SELECT COUNT(*) FROM photos WHERE user_id = ? AND status = 1", userID)
-	proxy.QueryRow(ctx, []interface{}{&stats.PlaceCount},
-		"SELECT COUNT(*) FROM footprints WHERE user_id = ?", userID)
-	proxy.QueryRow(ctx, []interface{}{&stats.LikeReceived},
-		"SELECT COALESCE(SUM(p.like_count), 0) FROM photos p WHERE p.user_id = ? AND p.status = 1", userID)
-	proxy.QueryRow(ctx, []interface{}{&stats.AchievementCount},
-		"SELECT COUNT(*) FROM user_achievements WHERE user_id = ?", userID)
+	if err := proxy.QueryRow(ctx, []interface{}{&stats.PhotoCount},
+		"SELECT COUNT(*) FROM photos WHERE user_id = ? AND status = 1", userID); err != nil {
+		util.LogDBError(ctx, "stats photo_count", err, userID)
+	}
+	if err := proxy.QueryRow(ctx, []interface{}{&stats.PlaceCount},
+		"SELECT COUNT(*) FROM footprints WHERE user_id = ?", userID); err != nil {
+		util.LogDBError(ctx, "stats place_count", err, userID)
+	}
+	if err := proxy.QueryRow(ctx, []interface{}{&stats.LikeReceived},
+		"SELECT COALESCE(SUM(p.like_count), 0) FROM photos p WHERE p.user_id = ? AND p.status = 1", userID); err != nil {
+		util.LogDBError(ctx, "stats like_received", err, userID)
+	}
+	if err := proxy.QueryRow(ctx, []interface{}{&stats.AchievementCount},
+		"SELECT COUNT(*) FROM user_achievements WHERE user_id = ?", userID); err != nil {
+		util.LogDBError(ctx, "stats achievement_count", err, userID)
+	}
 
 	util.Success(w, stats)
 	return nil
@@ -258,15 +288,16 @@ type AchievementDB struct {
 
 // GetUserAchievements 获取用户成就列表
 func GetUserAchievements(w http.ResponseWriter, r *http.Request) error {
-	userID := middleware.GetUserID(r.Context())
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(ctx, w, 401, "未登录", nil)
 		return nil
 	}
 
 	proxy := db.GetMySQLProxy()
 	var rows []AchievementDB
-	err := proxy.Select(r.Context(), &rows,
+	err := proxy.Select(ctx, &rows,
 		`SELECT ad.id, ad.name, ad.description, ad.icon, ad.condition_type, ad.condition_value, ad.exp_reward,
 			CASE WHEN ua.id IS NOT NULL THEN 1 ELSE 0 END as unlocked
 		FROM achievement_defs ad
@@ -275,7 +306,8 @@ func GetUserAchievements(w http.ResponseWriter, r *http.Request) error {
 		ORDER BY ad.sort_order`, userID,
 	)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.LogDBError(ctx, "query achievements", err, userID)
+		util.ErrorCtx(ctx, w, 500, "查询失败", err)
 		return nil
 	}
 

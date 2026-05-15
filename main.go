@@ -20,18 +20,18 @@ func main() {
 
 	// 初始化MySQL
 	if err := db.InitMySQL(); err != nil {
-		log.Warnf("init mysql failed: %v, running without database", err)
+		log.Errorf("[INIT] mysql connect failed: %v (服务将以无DB模式运行)", err)
 	} else {
 		defer db.CloseMySQL()
-		log.Info("mysql connected")
+		log.Info("[INIT] mysql connected")
 	}
 
 	// 初始化Redis
 	if err := db.InitRedis(); err != nil {
-		log.Warnf("init redis failed: %v, running without cache", err)
+		log.Errorf("[INIT] redis connect failed: %v (服务将以无缓存模式运行)", err)
 	} else {
 		defer db.CloseRedis()
-		log.Info("redis connected")
+		log.Info("[INIT] redis connected")
 	}
 
 	// ============ 注册路由 ============
@@ -81,9 +81,9 @@ func main() {
 	// 注册服务
 	thttp.RegisterNoProtocolService(s.Service("trpc.timespace.capsule.http"))
 
-	log.Info("timespace server starting...")
+	log.Info("[INIT] timespace server starting on :8080 ...")
 	if err := s.Serve(); err != nil {
-		panic(err)
+		log.Fatalf("[FATAL] server serve failed: %v", err)
 	}
 }
 
@@ -139,25 +139,37 @@ func handlePhotoRoutes(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// 包装函数类型适配
+// 包装函数类型适配（统一加上：Recovery + CORS + 访问日志）
 func wrapHandler(h middleware.HTTPHandler) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		return middleware.CORSMiddlewareHTTP(h)(w, r)
+		return middleware.RecoveryMiddlewareHTTP(
+			middleware.CORSMiddlewareHTTP(
+				middleware.AccessLogMiddlewareHTTP(h),
+			),
+		)(w, r)
 	}
 }
 
 func wrapAuth(h middleware.HTTPHandler) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		return middleware.CORSMiddlewareHTTP(
-			middleware.AuthMiddlewareHTTP(h),
+		return middleware.RecoveryMiddlewareHTTP(
+			middleware.CORSMiddlewareHTTP(
+				middleware.AccessLogMiddlewareHTTP(
+					middleware.AuthMiddlewareHTTP(h),
+				),
+			),
 		)(w, r)
 	}
 }
 
 func wrapOptionalAuth(h middleware.HTTPHandler) func(w http.ResponseWriter, r *http.Request) error {
 	return func(w http.ResponseWriter, r *http.Request) error {
-		return middleware.CORSMiddlewareHTTP(
-			middleware.OptionalAuthMiddlewareHTTP(h),
+		return middleware.RecoveryMiddlewareHTTP(
+			middleware.CORSMiddlewareHTTP(
+				middleware.AccessLogMiddlewareHTTP(
+					middleware.OptionalAuthMiddlewareHTTP(h),
+				),
+			),
 		)(w, r)
 	}
 }

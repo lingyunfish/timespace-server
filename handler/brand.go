@@ -21,7 +21,7 @@ type BrandMemoryDB struct {
 func GetBrandMemories(w http.ResponseWriter, r *http.Request) error {
 	placeID := r.URL.Query().Get("place_id")
 	if placeID == "" {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 
@@ -35,7 +35,7 @@ func GetBrandMemories(w http.ResponseWriter, r *http.Request) error {
 		WHERE place_id = ? AND status = 1 AND start_time <= ? AND end_time >= ?
 		ORDER BY created_at DESC`, placeID, now, now)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 

@@ -118,7 +118,7 @@ func GetNearbyPlaces(w http.ResponseWriter, r *http.Request) error {
 	lng, _ := strconv.ParseFloat(r.URL.Query().Get("longitude"), 64)
 	radius, _ := strconv.ParseFloat(r.URL.Query().Get("radius"), 64)
 	if lat == 0 || lng == 0 {
-		util.Error(w, 400, "经纬度参数不能为空")
+		util.ErrorCtx(r.Context(), w, 400, "经纬度参数不能为空", nil)
 		return nil
 	}
 	if radius == 0 {
@@ -140,7 +140,7 @@ func GetNearbyPlaces(w http.ResponseWriter, r *http.Request) error {
 		lat-delta, lat+delta, lng-delta, lng+delta,
 	)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 
@@ -175,7 +175,7 @@ func GetNearbyPlaces(w http.ResponseWriter, r *http.Request) error {
 func SearchPlaces(w http.ResponseWriter, r *http.Request) error {
 	keyword := r.URL.Query().Get("keyword")
 	if keyword == "" {
-		util.Error(w, 400, "搜索关键词不能为空")
+		util.ErrorCtx(r.Context(), w, 400, "搜索关键词不能为空", nil)
 		return nil
 	}
 
@@ -187,7 +187,7 @@ func SearchPlaces(w http.ResponseWriter, r *http.Request) error {
 		FROM places WHERE status = 1 AND (name LIKE ? OR address LIKE ? OR city LIKE ?)
 		ORDER BY photo_count DESC LIMIT 20`, like, like, like)
 	if err != nil {
-		util.Error(w, 500, "搜索失败")
+		util.ErrorCtx(r.Context(), w, 500, "搜索失败", err)
 		return nil
 	}
 
@@ -207,12 +207,12 @@ func SearchPlaces(w http.ResponseWriter, r *http.Request) error {
 func GetPlaceDetail(w http.ResponseWriter, r *http.Request) error {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 4 {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	placeID, _ := strconv.ParseUint(parts[3], 10, 64)
 	if placeID == 0 {
-		util.Error(w, 400, "地点ID无效")
+		util.ErrorCtx(r.Context(), w, 400, "地点ID无效", nil)
 		return nil
 	}
 
@@ -226,7 +226,7 @@ func GetPlaceDetail(w http.ResponseWriter, r *http.Request) error {
 			photo_count, visitor_count, like_count, is_official, COALESCE(category,'') as category, creator_id, created_at
 		FROM places WHERE id = ? AND status = 1`, placeID)
 	if err != nil {
-		util.Error(w, 404, "地点不存在")
+		util.ErrorCtx(r.Context(), w, 404, "地点不存在", err)
 		return nil
 	}
 
@@ -255,7 +255,7 @@ func GetPlaceDetail(w http.ResponseWriter, r *http.Request) error {
 func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 
@@ -270,11 +270,11 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 		Category    string  `json:"category"`
 	}
 	if err := util.ParseJSON(r, &req); err != nil {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	if req.Name == "" || req.Latitude == 0 || req.Longitude == 0 {
-		util.Error(w, 400, "名称和经纬度不能为空")
+		util.ErrorCtx(r.Context(), w, 400, "名称和经纬度不能为空", nil)
 		return nil
 	}
 
@@ -288,7 +288,7 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 		req.Name, req.Latitude-delta, req.Latitude+delta, req.Longitude-delta, req.Longitude+delta)
 
 	if existID > 0 {
-		util.Error(w, 409, "附近已存在同名记忆点")
+		util.ErrorCtx(r.Context(), w, 409, "附近已存在同名记忆点", nil)
 		return nil
 	}
 
@@ -297,7 +297,7 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		req.Name, req.Description, req.Latitude, req.Longitude, req.Address, req.City, req.Province, req.Category, userID)
 	if err != nil {
-		util.Error(w, 500, "创建失败")
+		util.ErrorCtx(r.Context(), w, 500, "创建失败", err)
 		return nil
 	}
 	id, _ := result.LastInsertId()
@@ -309,7 +309,7 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 func GetPlacePhotos(w http.ResponseWriter, r *http.Request) error {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	placeID, _ := strconv.ParseUint(parts[3], 10, 64)
@@ -341,7 +341,7 @@ func GetPlacePhotos(w http.ResponseWriter, r *http.Request) error {
 		WHERE p.place_id = ? AND p.status = 1 ORDER BY %s LIMIT ? OFFSET ?`, orderBy)
 	err := proxy.Select(ctx, &rows, query, placeID, pageSize, offset)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 
@@ -370,7 +370,7 @@ func GetPlacePhotos(w http.ResponseWriter, r *http.Request) error {
 func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	var req struct {
@@ -382,15 +382,15 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 		ImageURLs   []string `json:"image_urls"`
 	}
 	if err := util.ParseJSON(r, &req); err != nil {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	if len(req.ImageURLs) == 0 {
-		util.Error(w, 400, "至少需要一张照片")
+		util.ErrorCtx(r.Context(), w, 400, "至少需要一张照片", nil)
 		return nil
 	}
 	if req.Latitude == 0 || req.Longitude == 0 {
-		util.Error(w, 400, "位置信息无效")
+		util.ErrorCtx(r.Context(), w, 400, "位置信息无效", nil)
 		return nil
 	}
 
@@ -414,7 +414,7 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 				`INSERT INTO places (name, latitude, longitude, creator_id) VALUES (?, ?, ?, ?)`,
 				name, req.Latitude, req.Longitude, userID)
 			if err != nil {
-				util.Error(w, 500, "创建地点失败")
+				util.ErrorCtx(r.Context(), w, 500, "创建地点失败", err)
 				return nil
 			}
 			id, _ := result.LastInsertId()
@@ -427,7 +427,7 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 		"SELECT latitude, longitude FROM places WHERE id = ?", placeID)
 	dist := util.CalcDistance(req.Latitude, req.Longitude, placeLat, placeLng)
 	if dist > 200 {
-		util.Error(w, 403, "你不在记忆点附近，无法投递")
+		util.ErrorCtx(r.Context(), w, 403, "你不在记忆点附近，无法投递", nil)
 		return nil
 	}
 
@@ -461,7 +461,7 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 func GetPhotoDetail(w http.ResponseWriter, r *http.Request) error {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 4 {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	photoID, _ := strconv.ParseUint(parts[3], 10, 64)
@@ -477,7 +477,7 @@ func GetPhotoDetail(w http.ResponseWriter, r *http.Request) error {
 		FROM photos p LEFT JOIN users u ON u.id = p.user_id LEFT JOIN places pl ON pl.id = p.place_id
 		WHERE p.id = ? AND p.status = 1`, photoID)
 	if err != nil {
-		util.Error(w, 404, "照片不存在")
+		util.ErrorCtx(r.Context(), w, 404, "照片不存在", err)
 		return nil
 	}
 
@@ -516,12 +516,12 @@ func GetPhotoDetail(w http.ResponseWriter, r *http.Request) error {
 func LikePhoto(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	photoID, _ := strconv.ParseUint(parts[3], 10, 64)
@@ -553,7 +553,7 @@ func LikePhoto(w http.ResponseWriter, r *http.Request) error {
 func GetPhotoComments(w http.ResponseWriter, r *http.Request) error {
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	photoID, _ := strconv.ParseUint(parts[3], 10, 64)
@@ -565,7 +565,7 @@ func GetPhotoComments(w http.ResponseWriter, r *http.Request) error {
 		FROM comments c LEFT JOIN users u ON u.id = c.user_id
 		WHERE c.photo_id = ? AND c.status = 1 ORDER BY c.created_at DESC LIMIT 50`, photoID)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 	var comments []map[string]interface{}
@@ -583,12 +583,12 @@ func GetPhotoComments(w http.ResponseWriter, r *http.Request) error {
 func PostComment(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	parts := strings.Split(r.URL.Path, "/")
 	if len(parts) < 5 {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	photoID, _ := strconv.ParseUint(parts[3], 10, 64)
@@ -598,11 +598,11 @@ func PostComment(w http.ResponseWriter, r *http.Request) error {
 		Longitude float64 `json:"longitude"`
 	}
 	if err := util.ParseJSON(r, &req); err != nil {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	if req.Content == "" || len(req.Content) > 500 {
-		util.Error(w, 400, "评论内容无效")
+		util.ErrorCtx(r.Context(), w, 400, "评论内容无效", nil)
 		return nil
 	}
 
@@ -612,7 +612,7 @@ func PostComment(w http.ResponseWriter, r *http.Request) error {
 	var exists int
 	proxy.QueryRow(ctx, []interface{}{&exists}, "SELECT 1 FROM photos WHERE id = ? AND status = 1", photoID)
 	if exists == 0 {
-		util.Error(w, 404, "照片不存在")
+		util.ErrorCtx(r.Context(), w, 404, "照片不存在", nil)
 		return nil
 	}
 
@@ -620,7 +620,7 @@ func PostComment(w http.ResponseWriter, r *http.Request) error {
 		"INSERT INTO comments (photo_id, user_id, content, latitude, longitude) VALUES (?, ?, ?, ?, ?)",
 		photoID, userID, req.Content, req.Latitude, req.Longitude)
 	if err != nil {
-		util.Error(w, 500, "发表评论失败")
+		util.ErrorCtx(r.Context(), w, 500, "发表评论失败", err)
 		return nil
 	}
 	proxy.Exec(ctx, "UPDATE photos SET comment_count = comment_count + 1 WHERE id = ?", photoID)
@@ -634,7 +634,7 @@ func PostComment(w http.ResponseWriter, r *http.Request) error {
 func FavoritePhoto(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	var req struct {
@@ -642,7 +642,7 @@ func FavoritePhoto(w http.ResponseWriter, r *http.Request) error {
 		Action  string `json:"action"`
 	}
 	if err := util.ParseJSON(r, &req); err != nil {
-		util.Error(w, 400, "参数错误")
+		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
 		return nil
 	}
 	proxy := db.GetMySQLProxy()
@@ -659,7 +659,7 @@ func FavoritePhoto(w http.ResponseWriter, r *http.Request) error {
 func GetUserPhotos(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -677,7 +677,7 @@ func GetUserPhotos(w http.ResponseWriter, r *http.Request) error {
 		WHERE p.user_id = ? AND p.status = 1 ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
 		userID, pageSize, offset)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 	util.Success(w, map[string]interface{}{"photos": rows})
@@ -688,7 +688,7 @@ func GetUserPhotos(w http.ResponseWriter, r *http.Request) error {
 func GetUserFavorites(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
@@ -707,7 +707,7 @@ func GetUserFavorites(w http.ResponseWriter, r *http.Request) error {
 		WHERE f.user_id = ? ORDER BY f.created_at DESC LIMIT ? OFFSET ?`,
 		userID, pageSize, offset)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 	util.Success(w, map[string]interface{}{"photos": rows})
@@ -718,7 +718,7 @@ func GetUserFavorites(w http.ResponseWriter, r *http.Request) error {
 func GetUserFootprints(w http.ResponseWriter, r *http.Request) error {
 	userID := middleware.GetUserID(r.Context())
 	if userID == 0 {
-		util.Error(w, 401, "未登录")
+		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
 		return nil
 	}
 	proxy := db.GetMySQLProxy()
@@ -729,7 +729,7 @@ func GetUserFootprints(w http.ResponseWriter, r *http.Request) error {
 		FROM footprints f JOIN places p ON p.id = f.place_id
 		WHERE f.user_id = ? ORDER BY f.last_visit_at DESC`, userID)
 	if err != nil {
-		util.Error(w, 500, "查询失败")
+		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
 	util.Success(w, map[string]interface{}{"footprints": rows})
