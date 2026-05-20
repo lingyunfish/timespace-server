@@ -2,12 +2,15 @@ package main
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	trpc "trpc.group/trpc-go/trpc-go"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 	"trpc.group/trpc-go/trpc-go/log"
 
-	_ "timespace/config" // 触发 init() 注册自定义插件
+	"timespace/config" // init() 注册自定义插件
 	"timespace/db"
 	"timespace/handler"
 	"timespace/middleware"
@@ -77,8 +80,37 @@ func main() {
 	})
 
 	// --- 静态文件服务（仅本地存储模式下需要）---
+	// 把 URL 路径 /static/uploads/xxx 映射到 配置中的 SavePath 目录（绝对路径，避免依赖工作目录）
+	uploadCfg := config.Get().Upload
+	staticRoot, _ := filepath.Abs(uploadCfg.SavePath) // 例：/data/home/solo/timespace-server/uploads
+	urlPrefix := uploadCfg.URLPrefix                  // 例：/static/uploads
+	if urlPrefix == "" {
+		urlPrefix = "/static/uploads"
+	}
+	log.Infof("[INIT] static file: %s/* -> %s/*", urlPrefix, staticRoot)
+	fileServer := http.FileServer(http.Dir(staticRoot))
 	r.ANY("/static/*", func(w http.ResponseWriter, req *http.Request) error {
-		http.StripPrefix("/static/", http.FileServer(http.Dir("."))).ServeHTTP(w, req)
+		// 去掉前缀，让 FileServer 在 staticRoot 下定位文件
+		// /static/uploads/2026/05/15/xxx.jpg -> /2026/05/15/xxx.jpg
+		stripped := strings.TrimPrefix(req.URL.Path, urlPrefix)
+		if stripped == req.URL.Path { // 没匹配到前缀，兼容老路径
+			stripped = strings.TrimPrefix(req.URL.Path, "/static")
+		}
+		// 安全检查：防止路径穿越
+		fullPath := filepath.Join(staticRoot, stripped)
+		if !strings.HasPrefix(fullPath, staticRoot) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return nil
+		}
+		// 文件不存在时记录日志，方便排查
+		if _, err := os.Stat(fullPath); err != nil {
+			log.Warnf("[STATIC] file not found: url=%s file=%s err=%v", req.URL.Path, fullPath, err)
+			http.NotFound(w, req)
+			return nil
+		}
+		req2 := req.Clone(req.Context())
+		req2.URL.Path = stripped
+		fileServer.ServeHTTP(w, req2)
 		return nil
 	})
 
