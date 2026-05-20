@@ -26,13 +26,18 @@ func New() *Router {
 }
 
 // Handle 注册路由
-// 路径中可使用 :name 形式表示动态参数，例如 "/api/places/:id/photos"
+// 路径中可使用：
+//   - :name 形式表示动态参数（不含/），例如 "/api/places/:id/photos"
+//   - * 表示通配剩余路径（含/），例如 "/static/*"
 func (r *Router) Handle(method, path string, h func(http.ResponseWriter, *http.Request) error) {
 	parts := strings.Split(path, "/")
 	for i, p := range parts {
-		if strings.HasPrefix(p, ":") {
+		switch {
+		case strings.HasPrefix(p, ":"):
 			parts[i] = `([^/]+)`
-		} else {
+		case p == "*":
+			parts[i] = `(.*)`
+		default:
 			parts[i] = regexp.QuoteMeta(p)
 		}
 	}

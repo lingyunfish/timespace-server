@@ -51,14 +51,24 @@ plugins:
         secret: ${JWT_SECRET}
         expire_hours: 168
       upload:
+        # 存储后端：local 本地磁盘 / cos 腾讯云对象存储
+        driver: ${UPLOAD_DRIVER}
         max_size: 10485760
         allowed_types:
           - "image/jpeg"
           - "image/png"
           - "image/gif"
           - "image/webp"
+        # 本地存储配置（driver=local 时使用）
         save_path: "./uploads"
         url_prefix: "/static/uploads"
+        # 腾讯云 COS 配置（driver=cos 时使用）
+        cos:
+          secret_id: ${COS_SECRET_ID}
+          secret_key: ${COS_SECRET_KEY}
+          bucket_url: ${COS_BUCKET_URL}
+          cdn_domain: ${COS_CDN_DOMAIN}
+          path_prefix: "uploads/"
       geo:
         nearby_radius: 50
         search_radius: 5000

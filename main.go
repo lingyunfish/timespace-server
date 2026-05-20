@@ -12,6 +12,7 @@ import (
 	"timespace/handler"
 	"timespace/middleware"
 	"timespace/router"
+	"timespace/storage"
 )
 
 func main() {
@@ -29,6 +30,11 @@ func main() {
 	} else {
 		defer db.CloseRedis()
 		log.Info("[INIT] redis connected")
+	}
+
+	// 初始化存储后端（本地磁盘 / 腾讯云 COS）
+	if err := storage.Init(); err != nil {
+		log.Fatalf("[INIT] storage init failed: %v", err)
 	}
 
 	// ============ 路由注册（支持 :id 动态参数） ============
@@ -70,8 +76,8 @@ func main() {
 		return nil
 	})
 
-	// --- 静态文件服务 ---
-	r.ANY("/static/.*", func(w http.ResponseWriter, req *http.Request) error {
+	// --- 静态文件服务（仅本地存储模式下需要）---
+	r.ANY("/static/*", func(w http.ResponseWriter, req *http.Request) error {
 		http.StripPrefix("/static/", http.FileServer(http.Dir("."))).ServeHTTP(w, req)
 		return nil
 	})

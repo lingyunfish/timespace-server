@@ -35,10 +35,28 @@ type JWTConfig struct {
 }
 
 type UploadConfig struct {
+	// Driver: "local" 本地磁盘 | "cos" 腾讯云对象存储
+	Driver       string   `yaml:"driver"`
 	MaxSize      int64    `yaml:"max_size"`
 	AllowedTypes []string `yaml:"allowed_types"`
-	SavePath     string   `yaml:"save_path"`
-	URLPrefix    string   `yaml:"url_prefix"`
+
+	// 本地存储配置（driver=local 时使用）
+	SavePath  string `yaml:"save_path"`
+	URLPrefix string `yaml:"url_prefix"`
+
+	// 腾讯云 COS 配置（driver=cos 时使用）
+	COS COSConfig `yaml:"cos"`
+}
+
+type COSConfig struct {
+	SecretID  string `yaml:"secret_id"`
+	SecretKey string `yaml:"secret_key"`
+	// 完整 BucketURL，例如 https://timespace-1234567890.cos.ap-guangzhou.myqcloud.com
+	BucketURL string `yaml:"bucket_url"`
+	// CDN 加速域名（可选），不填则用 BucketURL
+	CDNDomain string `yaml:"cdn_domain"`
+	// 上传到 COS 的目录前缀，默认 "uploads/"
+	PathPrefix string `yaml:"path_prefix"`
 }
 
 type GeoConfig struct {

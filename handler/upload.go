@@ -1,45 +1,44 @@
 package handler
 
 import (
-	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
+	"trpc.group/trpc-go/trpc-go/log"
+
 	"timespace/config"
 	"timespace/middleware"
+	"timespace/storage"
 	"timespace/util"
 )
 
-// UploadFile 文件上传
+// UploadFile 文件上传（统一通过 storage.Storage 接口，本地或 COS）
 func UploadFile(w http.ResponseWriter, r *http.Request) error {
-	userID := middleware.GetUserID(r.Context())
+	ctx := r.Context()
+	userID := middleware.GetUserID(ctx)
 	if userID == 0 {
-		util.ErrorCtx(r.Context(), w, 401, "未登录", nil)
+		util.ErrorCtx(ctx, w, 401, "未登录", nil)
 		return nil
 	}
 
 	cfg := config.Get().Upload
 
-	r.ParseMultipartForm(cfg.MaxSize)
+	if err := r.ParseMultipartForm(cfg.MaxSize); err != nil {
+		util.ErrorCtx(ctx, w, 400, "解析表单失败", err)
+		return nil
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		util.ErrorCtx(r.Context(), w, 400, "获取文件失败", err)
+		util.ErrorCtx(ctx, w, 400, "获取文件失败", err)
 		return nil
 	}
 	defer file.Close()
 
-	// 检查文件大小
 	if header.Size > cfg.MaxSize {
-		util.ErrorCtx(r.Context(), w, 400, "文件太大", nil)
+		util.ErrorCtx(ctx, w, 400, "文件太大", nil)
 		return nil
 	}
 
-	// 检查文件类型
 	contentType := header.Header.Get("Content-Type")
 	allowed := false
 	for _, t := range cfg.AllowedTypes {
@@ -49,51 +48,26 @@ func UploadFile(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	if !allowed {
-		util.ErrorCtx(r.Context(), w, 400, "不支持的文件类型", nil)
+		util.ErrorCtx(ctx, w, 400, "不支持的文件类型", nil)
 		return nil
 	}
 
-	// 生成文件路径
-	ext := filepath.Ext(header.Filename)
-	if ext == "" {
-		switch contentType {
-		case "image/jpeg":
-			ext = ".jpg"
-		case "image/png":
-			ext = ".png"
-		case "image/gif":
-			ext = ".gif"
-		case "image/webp":
-			ext = ".webp"
-		default:
-			ext = ".jpg"
-		}
+	store := storage.Default()
+	if store == nil {
+		util.ErrorCtx(ctx, w, 500, "存储未初始化", nil)
+		return nil
 	}
 
-	now := time.Now()
-	dir := filepath.Join(cfg.SavePath, now.Format("2006/01/02"))
-	os.MkdirAll(dir, 0755)
-
-	filename := uuid.New().String() + ext
-	savePath := filepath.Join(dir, filename)
-
-	dst, err := os.Create(savePath)
+	url, err := store.Upload(ctx, file, header.Size, contentType, header.Filename)
 	if err != nil {
-		util.ErrorCtx(r.Context(), w, 500, "保存文件失败", err)
-		return nil
-	}
-	defer dst.Close()
-
-	if _, err := io.Copy(dst, file); err != nil {
-		util.ErrorCtx(r.Context(), w, 500, "保存文件失败", nil)
+		log.WithContext(ctx).Errorf("[UPLOAD] failed uid=%d size=%d err=%v", userID, header.Size, err)
+		util.ErrorCtx(ctx, w, 500, "上传失败", err)
 		return nil
 	}
 
-	url := fmt.Sprintf("%s/%s/%s", cfg.URLPrefix, now.Format("2006/01/02"), filename)
-
+	log.WithContext(ctx).Infof("[UPLOAD] success uid=%d size=%d url=%s", userID, header.Size, url)
 	util.SuccessFixURL(r, w, map[string]interface{}{
-		"url":      url,
-		"filename": filename,
+		"url": url,
 	})
 	return nil
 }
