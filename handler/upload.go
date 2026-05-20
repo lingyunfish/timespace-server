@@ -91,7 +91,7 @@ func UploadFile(w http.ResponseWriter, r *http.Request) error {
 
 	url := fmt.Sprintf("%s/%s/%s", cfg.URLPrefix, now.Format("2006/01/02"), filename)
 
-	util.Success(w, map[string]interface{}{
+	util.SuccessFixURL(r, w, map[string]interface{}{
 		"url":      url,
 		"filename": filename,
 	})

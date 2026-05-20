@@ -39,6 +39,6 @@ func GetBrandMemories(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	util.Success(w, map[string]interface{}{"memories": rows})
+	util.SuccessFixURL(r, w, map[string]interface{}{"memories": rows})
 	return nil
 }

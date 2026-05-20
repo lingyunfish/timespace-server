@@ -152,7 +152,7 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	log.WithContext(ctx).Infof("[WX LOGIN] success uid=%d openid=%s", user.ID, user.OpenID)
-	util.Success(w, LoginResponse{Token: token, UserInfo: &user})
+	util.SuccessFixURL(r, w, LoginResponse{Token: token, UserInfo: &user})
 	return nil
 }
 
@@ -178,7 +178,7 @@ func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
 		if err == nil {
 			var user model.User
 			if json.Unmarshal([]byte(cached), &user) == nil {
-				util.Success(w, user)
+				util.SuccessFixURL(r, w, user)
 				return nil
 			}
 		}
@@ -204,7 +204,7 @@ func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	util.Success(w, user)
+	util.SuccessFixURL(r, w, user)
 	return nil
 }
 
@@ -237,7 +237,7 @@ func UpdateUserInfo(w http.ResponseWriter, r *http.Request) error {
 		rdb.Del(ctx, fmt.Sprintf("user:%d", userID))
 	}
 	log.WithContext(ctx).Infof("[USER] update info success uid=%d", userID)
-	util.Success(w, nil)
+	util.SuccessFixURL(r, w, nil)
 	return nil
 }
 
@@ -270,7 +270,7 @@ func GetUserStats(w http.ResponseWriter, r *http.Request) error {
 		util.LogDBError(ctx, "stats achievement_count", err, userID)
 	}
 
-	util.Success(w, stats)
+	util.SuccessFixURL(r, w, stats)
 	return nil
 }
 
@@ -323,7 +323,7 @@ func GetUserAchievements(w http.ResponseWriter, r *http.Request) error {
 		})
 	}
 
-	util.Success(w, map[string]interface{}{"achievements": achievements})
+	util.SuccessFixURL(r, w, map[string]interface{}{"achievements": achievements})
 	return nil
 }
 

@@ -167,7 +167,7 @@ func GetNearbyPlaces(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 
-	util.Success(w, map[string]interface{}{"places": places})
+	util.SuccessFixURL(r, w, map[string]interface{}{"places": places})
 	return nil
 }
 
@@ -199,7 +199,7 @@ func SearchPlaces(w http.ResponseWriter, r *http.Request) error {
 			City: row.City, PhotoCount: row.PhotoCount, IsOfficial: row.IsOfficial != 0,
 		})
 	}
-	util.Success(w, map[string]interface{}{"places": places})
+	util.SuccessFixURL(r, w, map[string]interface{}{"places": places})
 	return nil
 }
 
@@ -247,7 +247,7 @@ func GetPlaceDetail(w http.ResponseWriter, r *http.Request) error {
 			`UPDATE places SET visitor_count = (SELECT COUNT(DISTINCT user_id) FROM footprints WHERE place_id = ?) WHERE id = ?`, placeID, placeID)
 	}
 
-	util.Success(w, place)
+	util.SuccessFixURL(r, w, place)
 	return nil
 }
 
@@ -301,7 +301,7 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 	id, _ := result.LastInsertId()
-	util.Success(w, map[string]interface{}{"id": id})
+	util.SuccessFixURL(r, w, map[string]interface{}{"id": id})
 	return nil
 }
 
@@ -362,7 +362,7 @@ func GetPlacePhotos(w http.ResponseWriter, r *http.Request) error {
 		}
 		photos = append(photos, p)
 	}
-	util.Success(w, map[string]interface{}{"photos": photos})
+	util.SuccessFixURL(r, w, map[string]interface{}{"photos": photos})
 	return nil
 }
 
@@ -453,7 +453,7 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 
 	go checkAchievements(userID)
 
-	util.Success(w, map[string]interface{}{"photo_ids": photoIDs, "place_id": placeID})
+	util.SuccessFixURL(r, w, map[string]interface{}{"photo_ids": photoIDs, "place_id": placeID})
 	return nil
 }
 
@@ -501,7 +501,7 @@ func GetPhotoDetail(w http.ResponseWriter, r *http.Request) error {
 		images = append(images, map[string]interface{}{"id": img.ID, "image_url": img.ImageURL})
 	}
 
-	util.Success(w, map[string]interface{}{
+	util.SuccessFixURL(r, w, map[string]interface{}{
 		"id": row.ID, "user_id": row.UserID, "place_id": row.PlaceID,
 		"image_url": row.ImageURL, "thumbnail_url": row.ThumbnailURL,
 		"description": row.Description, "latitude": row.Latitude, "longitude": row.Longitude,
@@ -545,7 +545,7 @@ func LikePhoto(w http.ResponseWriter, r *http.Request) error {
 				placeID, placeID)
 		}
 	}
-	util.Success(w, nil)
+	util.SuccessFixURL(r, w, nil)
 	return nil
 }
 
@@ -575,7 +575,7 @@ func GetPhotoComments(w http.ResponseWriter, r *http.Request) error {
 			"user_name": row.UserName, "user_avatar": row.UserAvatar,
 		})
 	}
-	util.Success(w, map[string]interface{}{"comments": comments})
+	util.SuccessFixURL(r, w, map[string]interface{}{"comments": comments})
 	return nil
 }
 
@@ -626,7 +626,7 @@ func PostComment(w http.ResponseWriter, r *http.Request) error {
 	proxy.Exec(ctx, "UPDATE photos SET comment_count = comment_count + 1 WHERE id = ?", photoID)
 
 	id, _ := result.LastInsertId()
-	util.Success(w, map[string]interface{}{"id": id})
+	util.SuccessFixURL(r, w, map[string]interface{}{"id": id})
 	return nil
 }
 
@@ -651,7 +651,7 @@ func FavoritePhoto(w http.ResponseWriter, r *http.Request) error {
 	} else {
 		proxy.Exec(r.Context(), "INSERT IGNORE INTO favorites (user_id, photo_id) VALUES (?, ?)", userID, req.PhotoID)
 	}
-	util.Success(w, nil)
+	util.SuccessFixURL(r, w, nil)
 	return nil
 }
 
@@ -680,7 +680,7 @@ func GetUserPhotos(w http.ResponseWriter, r *http.Request) error {
 		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
-	util.Success(w, map[string]interface{}{"photos": rows})
+	util.SuccessFixURL(r, w, map[string]interface{}{"photos": rows})
 	return nil
 }
 
@@ -710,7 +710,7 @@ func GetUserFavorites(w http.ResponseWriter, r *http.Request) error {
 		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
-	util.Success(w, map[string]interface{}{"photos": rows})
+	util.SuccessFixURL(r, w, map[string]interface{}{"photos": rows})
 	return nil
 }
 
@@ -732,7 +732,7 @@ func GetUserFootprints(w http.ResponseWriter, r *http.Request) error {
 		util.ErrorCtx(r.Context(), w, 500, "查询失败", err)
 		return nil
 	}
-	util.Success(w, map[string]interface{}{"footprints": rows})
+	util.SuccessFixURL(r, w, map[string]interface{}{"footprints": rows})
 	return nil
 }
 
