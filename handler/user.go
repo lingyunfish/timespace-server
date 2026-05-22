@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"timespace/config"
 	"timespace/db"
@@ -157,10 +159,11 @@ func UserLogin(w http.ResponseWriter, r *http.Request) error {
 }
 
 // UpdateUserInfoRequest 更新用户信息请求
+// 字段全部用指针：nil 表示不更新，非 nil 表示要更新（含空字符串）
 type UpdateUserInfoRequest struct {
-	Nickname  string `json:"nickname"`
-	AvatarURL string `json:"avatar_url"`
-	Gender    int    `json:"gender"`
+	Nickname  *string `json:"nickname,omitempty"`
+	AvatarURL *string `json:"avatar_url,omitempty"`
+	Gender    *int    `json:"gender,omitempty"`
 }
 
 // GetUserInfo 获取当前用户信息
@@ -208,7 +211,7 @@ func GetUserInfo(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-// UpdateUserInfo 更新用户信息
+// UpdateUserInfo 更新用户信息（仅更新传入的字段）
 func UpdateUserInfo(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
 	userID := middleware.GetUserID(ctx)
@@ -222,22 +225,72 @@ func UpdateUserInfo(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
+	// 动态拼接 SET 子句，只更新传入的字段
+	sets := []string{}
+	args := []interface{}{}
+	if req.Nickname != nil {
+		nickname := strings.TrimSpace(*req.Nickname)
+		// 校验：长度 1~20 字符，禁止空白
+		nameLen := utf8.RuneCountInString(nickname)
+		if nameLen < 1 || nameLen > 20 {
+			util.ErrorCtx(ctx, w, 400, "昵称长度应为 1~20 个字符", nil)
+			return nil
+		}
+		// 简单的脏字过滤（可后续接入第三方）
+		if strings.ContainsAny(nickname, "\n\r\t") {
+			util.ErrorCtx(ctx, w, 400, "昵称不能包含特殊字符", nil)
+			return nil
+		}
+		sets = append(sets, "nickname = ?")
+		args = append(args, nickname)
+	}
+	if req.AvatarURL != nil {
+		sets = append(sets, "avatar_url = ?")
+		args = append(args, *req.AvatarURL)
+	}
+	if req.Gender != nil {
+		if *req.Gender < 0 || *req.Gender > 2 {
+			util.ErrorCtx(ctx, w, 400, "gender 取值应为 0/1/2", nil)
+			return nil
+		}
+		sets = append(sets, "gender = ?")
+		args = append(args, *req.Gender)
+	}
+	if len(sets) == 0 {
+		util.ErrorCtx(ctx, w, 400, "未提供任何要更新的字段", nil)
+		return nil
+	}
+
+	sets = append(sets, "updated_at = NOW()")
+	sql := "UPDATE users SET " + strings.Join(sets, ", ") + " WHERE id = ?"
+	args = append(args, userID)
+
 	proxy := db.GetMySQLProxy()
-	_, err := proxy.Exec(ctx,
-		"UPDATE users SET nickname = ?, avatar_url = ?, gender = ?, updated_at = NOW() WHERE id = ?",
-		req.Nickname, req.AvatarURL, req.Gender, userID,
-	)
-	if err != nil {
+	if _, err := proxy.Exec(ctx, sql, args...); err != nil {
 		util.LogDBError(ctx, "update user info", err, userID)
 		util.ErrorCtx(ctx, w, 500, "更新失败", err)
 		return nil
 	}
 
+	// 清缓存
 	if rdb := db.GetRedis(); rdb != nil {
 		rdb.Del(ctx, fmt.Sprintf("user:%d", userID))
 	}
-	log.WithContext(ctx).Infof("[USER] update info success uid=%d", userID)
-	util.SuccessFixURL(r, w, nil)
+
+	// 返回最新的用户信息
+	var userDB UserDB
+	if err := proxy.QueryToStruct(ctx, &userDB,
+		"SELECT id, nickname, avatar_url, gender, level, exp, is_vip, status, created_at FROM users WHERE id = ?",
+		userID,
+	); err != nil {
+		util.LogDBError(ctx, "query user after update", err, userID)
+		util.SuccessFixURL(r, w, nil)
+		return nil
+	}
+	user := toModelUser(&userDB)
+
+	log.WithContext(ctx).Infof("[USER] update info success uid=%d fields=%v", userID, sets)
+	util.SuccessFixURL(r, w, user)
 	return nil
 }
 
