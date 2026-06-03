@@ -268,6 +268,7 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 		City        string  `json:"city"`
 		Province    string  `json:"province"`
 		Category    string  `json:"category"`
+		CoverURL    string  `json:"cover_url"`
 	}
 	if err := util.ParseJSON(r, &req); err != nil {
 		util.ErrorCtx(r.Context(), w, 400, "参数错误", nil)
@@ -293,9 +294,9 @@ func CreatePlace(w http.ResponseWriter, r *http.Request) error {
 	}
 
 	result, err := proxy.Exec(ctx,
-		`INSERT INTO places (name, description, latitude, longitude, address, city, province, category, creator_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		req.Name, req.Description, req.Latitude, req.Longitude, req.Address, req.City, req.Province, req.Category, userID)
+		`INSERT INTO places (name, description, latitude, longitude, address, city, province, category, cover_url, creator_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		req.Name, req.Description, req.Latitude, req.Longitude, req.Address, req.City, req.Province, req.Category, req.CoverURL, userID)
 	if err != nil {
 		util.ErrorCtx(r.Context(), w, 500, "创建失败", err)
 		return nil
@@ -447,6 +448,22 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 	proxy.Exec(ctx,
 		"UPDATE places SET photo_count = (SELECT COUNT(*) FROM photos WHERE place_id = ? AND status = 1) WHERE id = ?",
 		placeID, placeID)
+
+	// 若该地点尚无封面图，自动用本次第一张照片作为封面
+	if len(req.ImageURLs) > 0 {
+		var existingCover string
+		proxy.QueryRow(ctx, []interface{}{&existingCover},
+			"SELECT COALESCE(cover_url, '') FROM places WHERE id = ?", placeID)
+		if existingCover == "" {
+			if _, err := proxy.Exec(ctx,
+				"UPDATE places SET cover_url = ? WHERE id = ?",
+				req.ImageURLs[0], placeID,
+			); err != nil {
+				util.LogDBError(ctx, "auto set cover_url", err, placeID)
+			}
+		}
+	}
+
 	proxy.Exec(ctx,
 		`INSERT INTO footprints (user_id, place_id) VALUES (?, ?)
 		ON DUPLICATE KEY UPDATE visit_count = visit_count + 1, last_visit_at = NOW()`, userID, placeID)
