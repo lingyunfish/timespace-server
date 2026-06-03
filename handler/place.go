@@ -426,8 +426,8 @@ func PublishPhotos(w http.ResponseWriter, r *http.Request) error {
 	proxy.QueryRow(ctx, []interface{}{&placeLat, &placeLng},
 		"SELECT latitude, longitude FROM places WHERE id = ?", placeID)
 	dist := util.CalcDistance(req.Latitude, req.Longitude, placeLat, placeLng)
-	if dist > 200 {
-		util.ErrorCtx(r.Context(), w, 403, "你不在记忆点附近，无法投递", nil)
+	if dist > 500 {
+		util.ErrorCtx(r.Context(), w, 403, "你距离该记忆点超过 500m，无法投递", nil)
 		return nil
 	}
 
